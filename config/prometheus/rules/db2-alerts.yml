@@ -82,3 +82,71 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: "Letztes Backup von {{ $labels.db }} ist aelter als 2 Tage"
+
+  - name: db2-hadr
+    rules:
+      - alert: Db2HadrDisconnected
+        expr: db2_hadr_connected == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "HADR {{ $labels.db }}: Standby {{ $labels.standby_host }} nicht verbunden"
+          description: "Primary und Standby sind seit 2 Minuten getrennt. Logs werden nicht repliziert."
+
+      - alert: Db2HadrNotPeer
+        # SUPERASYNC (z. B. Auxiliary Standbys) erreicht nie PEER
+        expr: db2_hadr_peer{syncmode!="SUPERASYNC"} == 0 and db2_hadr_connected == 1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "HADR {{ $labels.db }}: Standby {{ $labels.standby_host }} nicht in PEER"
+          description: "Standby ist verbunden, aber seit 10 Minuten im Catchup. Status in db2_hadr_info bzw. Dashboard pruefen."
+
+      - alert: Db2HadrLogGapHigh
+        expr: db2_hadr_log_gap_bytes > 256 * 1024 * 1024
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "HADR {{ $labels.db }}: Log-Gap zu {{ $labels.standby_host }} {{ $value | humanize1024 }}B"
+
+      - alert: Db2HadrReplayDelayHigh
+        # Bei absichtlich gesetztem HADR_REPLAY_DELAY Schwellwert anpassen
+        expr: db2_hadr_replay_delay_seconds > 600
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "HADR {{ $labels.db }}: Standby {{ $labels.standby_host }} hinkt {{ $value | humanizeDuration }} hinterher"
+
+      - alert: Db2HadrHeartbeatsMissed
+        expr: increase(db2_hadr_heartbeats_missed_total[10m]) > 2
+        labels: {severity: warning}
+        annotations:
+          summary: "HADR {{ $labels.db }}: {{ $value | printf \"%.0f\" }} verpasste Heartbeats zu {{ $labels.standby_host }}"
+          description: "Netzwerkprobleme zwischen Primary und Standby?"
+
+      - alert: Db2HadrStandbyBufferFull
+        expr: db2_hadr_standby_recv_buffer_percent > 90 or db2_hadr_standby_spool_percent > 80
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "HADR {{ $labels.db }}: Receive-Buffer/Spool auf {{ $labels.standby_host }} zu {{ $value | printf \"%.0f\" }}% voll"
+          description: "Der Standby spielt Logs langsamer ein als sie ankommen. Im Sync-Modus bremst das den Primary aus."
+
+      - alert: Db2HadrPrimaryWaiting
+        expr: db2_hadr_log_wait_current_seconds > 5
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "HADR {{ $labels.db }}: Primary wartet seit {{ $value | printf \"%.0f\" }} s auf den Standby"
+          description: "Commits auf dem Primary sind blockiert (Syncmode {{ $labels.syncmode }})."
+
+      - alert: Db2HadrRoleChanged
+        # mehr als ein Primary-Host in den letzten 15 Minuten = Takeover
+        # (funktioniert, wenn der Exporter per Automatic Client Reroute dem Primary folgt)
+        expr: |
+          count by (db, standby_id) (
+            count by (db, standby_id, primary_host) (last_over_time(db2_hadr_info[15m]))
+          ) > 1
+        labels: {severity: warning}
+        annotations:
+          summary: "HADR {{ $labels.db }}: Rollenwechsel (Takeover) in den letzten 15 Minuten"

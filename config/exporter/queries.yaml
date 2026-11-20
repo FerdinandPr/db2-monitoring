@@ -236,6 +236,73 @@ queries:
       - {column: total_act_time, name: db2_activity_time_ms_total, type: counter, help: Ausfuehrungszeit der Aktivitaeten in ms}
       - {column: total_app_rqst_time, name: db2_app_request_time_ms_total, type: counter, help: Request-Zeit aus Applikationssicht in ms}
 
+  # ------------------------------------------------------- HADR
+  # Liefert nur Zeilen, wenn HADR konfiguriert ist (eine Zeile je Standby und Log-Stream).
+  # Am Primary abfragen - ein Standby ohne Reads on Standby nimmt keine Verbindungen an.
+  # Status-Texte stehen nur in db2_hadr_info, damit die Zahlen-Metriken bei
+  # Statuswechseln keine neuen Zeitreihen erzeugen.
+  - name: hadr_info
+    sql: |
+      SELECT PRIMARY_MEMBER AS MEMBER, STANDBY_ID, LOG_STREAM_ID,
+             HADR_ROLE, HADR_SYNCMODE, HADR_STATE, HADR_CONNECT_STATUS,
+             PRIMARY_MEMBER_HOST, STANDBY_MEMBER_HOST, STANDBY_INSTANCE, 1 AS INFO
+      FROM TABLE(MON_GET_HADR(-2)) AS T
+    labels:
+      member: member
+      standby_id: standby_id
+      log_stream_id: log_stream
+      hadr_role: role
+      hadr_syncmode: syncmode
+      hadr_state: state
+      hadr_connect_status: connect_status
+      primary_member_host: primary_host
+      standby_member_host: standby_host
+      standby_instance: standby_instance
+    metrics:
+      - {column: info, name: db2_hadr_info, help: HADR-Rolle, Syncmode, Status und Hosts als Labels (Wert immer 1)}
+
+  - name: hadr
+    sql: |
+      SELECT PRIMARY_MEMBER AS MEMBER, STANDBY_ID, LOG_STREAM_ID, HADR_SYNCMODE, STANDBY_MEMBER_HOST,
+             CASE WHEN HADR_CONNECT_STATUS = 'CONNECTED' THEN 1 ELSE 0 END AS IS_CONNECTED,
+             CASE WHEN HADR_STATE = 'PEER' THEN 1 ELSE 0 END AS IS_PEER,
+             CASE WHEN HADR_ROLE = 'PRIMARY' THEN 1 ELSE 0 END AS IS_PRIMARY,
+             HADR_LOG_GAP, STANDBY_RECV_REPLAY_GAP, TIME_SINCE_LAST_RECV,
+             HEARTBEAT_MISSED, HEARTBEAT_EXPECTED,
+             LOG_HADR_WAIT_CUR, LOG_HADR_WAIT_TIME, LOG_HADR_WAITS_TOTAL,
+             STANDBY_RECV_BUF_PERCENT, STANDBY_SPOOL_PERCENT, PEER_WINDOW, HADR_TIMEOUT,
+             CASE WHEN PRIMARY_LOG_TIME IS NULL OR STANDBY_REPLAY_LOG_TIME IS NULL THEN NULL ELSE
+               (DAYS(PRIMARY_LOG_TIME) - DAYS(STANDBY_REPLAY_LOG_TIME)) * 86400
+               + MIDNIGHT_SECONDS(PRIMARY_LOG_TIME) - MIDNIGHT_SECONDS(STANDBY_REPLAY_LOG_TIME) END AS REPLAY_DELAY,
+             CASE WHEN PRIMARY_LOG_TIME IS NULL OR STANDBY_LOG_TIME IS NULL THEN NULL ELSE
+               (DAYS(PRIMARY_LOG_TIME) - DAYS(STANDBY_LOG_TIME)) * 86400
+               + MIDNIGHT_SECONDS(PRIMARY_LOG_TIME) - MIDNIGHT_SECONDS(STANDBY_LOG_TIME) END AS RECEIVE_DELAY
+      FROM TABLE(MON_GET_HADR(-2)) AS T
+    labels:
+      member: member
+      standby_id: standby_id
+      log_stream_id: log_stream
+      hadr_syncmode: syncmode
+      standby_member_host: standby_host
+    metrics:
+      - {column: is_connected, name: db2_hadr_connected, help: 1 wenn Primary und Standby verbunden sind}
+      - {column: is_peer, name: db2_hadr_peer, help: 1 wenn HADR im Status PEER ist}
+      - {column: is_primary, name: db2_hadr_is_primary, help: 1 wenn die abgefragte Datenbank Primary ist}
+      - {column: hadr_log_gap, name: db2_hadr_log_gap_bytes, help: Log-Abstand Primary zu Standby (gleitender Durchschnitt)}
+      - {column: standby_recv_replay_gap, name: db2_hadr_recv_replay_gap_bytes, help: Abstand empfangene zu eingespielte Logs auf dem Standby}
+      - {column: replay_delay, name: db2_hadr_replay_delay_seconds, help: Zeitabstand letzter Log-Eintrag Primary zu letztem eingespielten auf dem Standby}
+      - {column: receive_delay, name: db2_hadr_receive_delay_seconds, help: Zeitabstand letzter Log-Eintrag Primary zu letztem empfangenen auf dem Standby}
+      - {column: time_since_last_recv, name: db2_hadr_time_since_last_recv_seconds, help: Sekunden seit der letzten Nachricht vom Partner}
+      - {column: heartbeat_missed, name: db2_hadr_heartbeats_missed_total, type: counter, help: Verpasste Heartbeats seit Verbindungsaufbau}
+      - {column: heartbeat_expected, name: db2_hadr_heartbeats_expected_total, type: counter, help: Erwartete Heartbeats seit Verbindungsaufbau}
+      - {column: log_hadr_wait_cur, name: db2_hadr_log_wait_current_seconds, help: Wie lange der Primary gerade auf HADR wartet}
+      - {column: log_hadr_wait_time, name: db2_hadr_log_wait_time_ms_total, type: counter, help: Gesamte Wartezeit des Log-Writers auf HADR in ms}
+      - {column: log_hadr_waits_total, name: db2_hadr_log_waits_total, type: counter, help: Anzahl der Log-Writer-Wartevorgaenge auf HADR}
+      - {column: standby_recv_buf_percent, name: db2_hadr_standby_recv_buffer_percent, help: Fuellgrad des Receive-Buffers auf dem Standby}
+      - {column: standby_spool_percent, name: db2_hadr_standby_spool_percent, help: Fuellgrad des Log-Spools auf dem Standby (nur bei begrenztem Spool)}
+      - {column: peer_window, name: db2_hadr_peer_window_seconds, help: Konfiguriertes HADR_PEER_WINDOW}
+      - {column: hadr_timeout, name: db2_hadr_timeout_seconds, help: Konfiguriertes HADR_TIMEOUT}
+
   # ------------------------------------------------------- Top-SQL
   # Die 20 teuersten Statements im Package Cache (nach Ausfuehrungszeit).
   # Achtung: Statement-Text als Label -> moderate Kardinalitaet. Bei Bedarf

@@ -63,6 +63,7 @@ Die Test-Datenbank wird als Instanzbesitzer `db2inst1` abgefragt. Die externe Da
 | Tablespaces & Logs | Belegung der Tablespaces, Dateisysteme der Storage-Pfade, Logspace in %, Log-Schreibrate und -latenz |
 | Locks & Sorts | Lock-Waits, Timeouts, Deadlocks, Eskalationen, gehaltene/wartende Locks, aktuelle Lock-Waits je Tabelle, Sort-Overflows |
 | SQL-Durchsatz | Commits/Rollbacks, Statements/s, Zeilen gelesen/zurück/geändert, Read-Efficiency, CPU, Wartezeit-Anteil |
+| HADR | Status je Standby (Rolle, Syncmode, State, Verbindung, Hosts), Log-Gap, Empfangs- und Replay-Verzögerung, Wartezeit des Primary, Receive-Buffer/Spool, verpasste Heartbeats |
 | Exporter | Laufzeit und Status jeder Abfrage |
 
 **Db2 Top SQL**: die 20 teuersten Statements aus dem Package Cache (nach `TOTAL_ACT_TIME`) mit Ausführungen, Ø-Zeit, CPU, Wartezeit, Lock-Wartezeit und Zeilen. Dazu die Statements, die gerade die meiste Last erzeugen.
@@ -83,8 +84,25 @@ Die Dashboards sind in Grafana editierbar. Änderungen landen dann in der Grafan
 | Db2Deadlocks / Db2LockTimeouts | Deadlocks bzw. mehr als 5 Lock-Timeouts in 10 Minuten |
 | Db2BufferpoolHitRatioLow | Hit-Ratio < 80 % bei nennenswerter Last |
 | Db2BackupTooOld | letztes Backup älter als 2 Tage (nicht für `env=test`) |
+| Db2HadrDisconnected | Standby seit 2 Minuten nicht verbunden |
+| Db2HadrNotPeer | verbunden, aber seit 10 Minuten nicht PEER (SUPERASYNC ausgenommen) |
+| Db2HadrLogGapHigh | Log-Gap > 256 MB |
+| Db2HadrReplayDelayHigh | Standby spielt Logs mehr als 10 Minuten verzögert ein |
+| Db2HadrHeartbeatsMissed | mehr als 2 verpasste Heartbeats in 10 Minuten |
+| Db2HadrStandbyBufferFull | Receive-Buffer > 90 % oder Spool > 80 % |
+| Db2HadrPrimaryWaiting | Primary wartet seit mehr als 5 s auf den Standby (Commits blockiert) |
+| Db2HadrRoleChanged | Takeover: Primary-Host hat in den letzten 15 Minuten gewechselt |
 
 Die Alerts sind in Prometheus und in Grafana sichtbar. Für Benachrichtigungen (Mail, Teams …) einen Alertmanager ergänzen oder in Grafana Contact Points einrichten.
+
+## HADR
+
+HADR wird über `MON_GET_HADR` am **Primary** überwacht. Das liefert eine Zeile je Standby (Principal und Auxiliary) und je Log-Stream. Ist HADR nicht konfiguriert, bleiben die HADR-Panels leer, und es werden keine HADR-Alerts ausgelöst.
+
+- **Target**: In `targets.yaml` den Primary eintragen. Ein Standby ohne *Reads on Standby* nimmt keine Verbindungen an.
+- **Takeover**: Ist auf dem Server *Automatic Client Reroute* eingerichtet (`db2 update alternate server for database ...`), folgt der Exporter nach einem Takeover automatisch dem neuen Primary. Der Alert `Db2HadrRoleChanged` meldet den Wechsel. Ohne ACR meldet `Db2Down` den alten Primary als nicht erreichbar.
+- **Status-Labels**: Rolle, State und Verbindung stehen nur in `db2_hadr_info`. Die Zahlen-Metriken tragen nur stabile Labels (`standby_id`, `standby_host`, `syncmode`). So entstehen bei einem Statuswechsel keine neuen Zeitreihen.
+- **HADR_REPLAY_DELAY**: Ist eine Replay-Verzögerung absichtlich konfiguriert, den Schwellwert in `Db2HadrReplayDelayHigh` entsprechend erhöhen.
 
 ## Berechtigungen
 
@@ -119,15 +137,18 @@ Das Server-Zertifikat (ARM/PEM) nach `config/exporter/certs/` legen. Der Ordner 
 Neue Query in `config/exporter/queries.yaml` eintragen:
 
 ```yaml
-  - name: hadr
+  - name: table_activity
     sql: |
-      SELECT HADR_ROLE, HADR_STATE, HADR_LOG_GAP
-      FROM TABLE(MON_GET_HADR(-2)) AS T
+      SELECT TABSCHEMA, TABNAME, ROWS_READ, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED
+      FROM TABLE(MON_GET_TABLE('', '', -2)) AS T
+      WHERE TABSCHEMA NOT LIKE 'SYS%'
+      ORDER BY ROWS_READ DESC FETCH FIRST 20 ROWS ONLY
     labels:
-      hadr_role: role
-      hadr_state: state
+      tabschema: schema
+      tabname: table
     metrics:
-      - {column: hadr_log_gap, name: db2_hadr_log_gap_bytes, help: HADR Log-Gap}
+      - {column: rows_read, name: db2_table_rows_read, help: Gelesene Zeilen je Tabelle}
+      - {column: rows_inserted, name: db2_table_rows_inserted, help: Eingefuegte Zeilen je Tabelle}
 ```
 
 Danach `podman restart db2-exporter`. Spaltennamen sind unabhängig von Groß-/Kleinschreibung. Alle Metriken bekommen automatisch das Label `db`.

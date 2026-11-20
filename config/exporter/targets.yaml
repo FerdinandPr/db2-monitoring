@@ -1,0 +1,28 @@
+# Zu ueberwachende Db2-Datenbanken.
+# ${VAR} und ${VAR:-default} werden aus der Umgebung (.env) ersetzt.
+# Passwoerter nie hier eintragen, sondern per password_env referenzieren.
+
+query_timeout_seconds: 20
+
+targets:
+  - name: ${DB2_NAME:-PRODDB}          # Wert des Labels "db" in Prometheus/Grafana
+    host: ${DB2_HOST}
+    port: ${DB2_PORT:-50000}
+    database: ${DB2_DATABASE}
+    user: ${DB2_USER:-db2mon}
+    password_env: DB2_PASSWORD
+    labels:
+      env: ${DB2_ENV:-prod}
+    # SSL/TLS (Zertifikat nach config/exporter/certs legen):
+    ssl: false
+    # ssl_server_certificate: /etc/db2-exporter/certs/db2-server.arm
+
+  # Weitere Datenbank: Block kopieren, eigenen Namen und eigene Variablen verwenden
+  # - name: DWHDB
+  #   host: ${DWH_HOST}
+  #   port: 50001
+  #   database: DWHDB
+  #   user: db2mon
+  #   password_env: DWH_PASSWORD
+  #   labels:
+  #     env: prod

@@ -1,0 +1,84 @@
+# Alert-Regeln. Sichtbar in Prometheus (Alerts) und Grafana (Alerting -> Alert rules).
+# Fuer Benachrichtigungen einen Alertmanager ergaenzen oder Grafana-Contact-Points nutzen.
+
+groups:
+  - name: db2
+    rules:
+      - alert: Db2Down
+        expr: db2_up == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Db2 {{ $labels.db }} nicht erreichbar"
+          description: "Der Exporter kann seit 2 Minuten keine Verbindung zu {{ $labels.db }} aufbauen."
+
+      - alert: Db2ExporterQueryFailing
+        expr: db2_exporter_query_success == 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Query {{ $labels.query }} auf {{ $labels.db }} schlaegt fehl"
+          description: "Rechte oder Db2-Version pruefen (Exporter-Log: podman logs db2-exporter)."
+
+      - alert: Db2TablespaceFull
+        expr: |
+          # Bezug: MAXSIZE falls gesetzt, sonst nutzbare Groesse bei Tablespaces ohne AUTORESIZE
+          100 * db2_tablespace_used_bytes{type="DMS"}
+            / on(db, member, tablespace) group_left()
+          (
+            db2_tablespace_max_bytes
+            or (db2_tablespace_usable_bytes and on(db, member, tablespace) db2_tablespace_auto_resize == 0)
+          ) > 90
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Tablespace {{ $labels.tablespace }} auf {{ $labels.db }} zu {{ $value | printf \"%.0f\" }}% belegt"
+
+      - alert: Db2StoragePathFull
+        expr: 100 * db2_storage_path_fs_used_bytes / db2_storage_path_fs_total_bytes > 90
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Dateisystem von Storage-Pfad {{ $labels.path }} ({{ $labels.db }}) zu {{ $value | printf \"%.0f\" }}% belegt"
+
+      - alert: Db2LogSpaceHigh
+        expr: |
+          100 * db2_log_used_bytes / (db2_log_used_bytes + db2_log_available_bytes) > 80
+          and db2_log_available_bytes >= 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Logspace auf {{ $labels.db }} zu {{ $value | printf \"%.0f\" }}% belegt"
+          description: "Lange laufende Transaktion? APPLID_HOLDING_OLDEST_XACT in MON_GET_TRANSACTION_LOG pruefen."
+
+      - alert: Db2Deadlocks
+        expr: increase(db2_deadlocks_total[10m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value | printf \"%.0f\" }} Deadlock(s) auf {{ $labels.db }} in den letzten 10 Minuten"
+
+      - alert: Db2LockTimeouts
+        expr: increase(db2_lock_timeouts_total[10m]) > 5
+        labels: {severity: warning}
+        annotations:
+          summary: "Lock-Timeouts auf {{ $labels.db }}: {{ $value | printf \"%.0f\" }} in 10 Minuten"
+
+      - alert: Db2BufferpoolHitRatioLow
+        expr: |
+          100 * (1 - (
+            rate(db2_bufferpool_data_physical_reads_total[15m]) + rate(db2_bufferpool_index_physical_reads_total[15m])
+          ) / clamp_min(
+            rate(db2_bufferpool_data_logical_reads_total[15m]) + rate(db2_bufferpool_index_logical_reads_total[15m]), 1
+          )) < 80
+          and (rate(db2_bufferpool_data_logical_reads_total[15m]) + rate(db2_bufferpool_index_logical_reads_total[15m])) > 100
+        for: 30m
+        labels: {severity: info}
+        annotations:
+          summary: "Bufferpool {{ $labels.bufferpool }} auf {{ $labels.db }}: Hit-Ratio {{ $value | printf \"%.0f\" }}%"
+
+      - alert: Db2BackupTooOld
+        expr: db2_database_last_backup_age_seconds > 2 * 86400 and on(db) db2_up{env!="test"} == 1
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: "Letztes Backup von {{ $labels.db }} ist aelter als 2 Tage"

@@ -1,0 +1,5 @@
+.env
+config/exporter/certs/*
+!config/exporter/certs/.gitkeep
+__pycache__/
+*.pyc

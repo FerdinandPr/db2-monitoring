@@ -1,0 +1,19 @@
+# Db2-Exporter: Python + ibm_db (bringt den IBM Data Server Driver / clidriver mit)
+# Hinweis: ibm_db liefert den clidriver nur fuer x86_64 (amd64).
+FROM docker.io/library/python:3.12-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libxml2 \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --uid 10001 --create-home exporter
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY db2_exporter.py .
+
+USER 10001
+EXPOSE 9953
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9953/health', timeout=3)"
+ENTRYPOINT ["python", "-u", "/app/db2_exporter.py"]

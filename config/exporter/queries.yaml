@@ -1,0 +1,267 @@
+# SQL-Abfragen des Db2-Exporters.
+#
+# Aufbau je Query:
+#   name:     eindeutiger Name (taucht im Label "query" der Exporter-Metriken auf)
+#   sql:      SQL-Statement (Spaltennamen werden case-insensitiv gemappt)
+#   labels:   Spalte -> Prometheus-Label
+#   metrics:  Liste von {column, name, type (gauge|counter), help}
+#
+# Alle Metriken bekommen automatisch das Label "db" (Name aus targets.yaml)
+# plus die zusaetzlichen Labels des Targets.
+# Zeiteinheiten folgen Db2: *_TIME in Millisekunden, CPU in Mikrosekunden.
+# Voraussetzung: Db2 LUW 11.1 oder neuer.
+
+queries:
+
+  # ---------------------------------------------------------------- Status
+  - name: instance_info
+    sql: |
+      SELECT INST_NAME, SERVICE_LEVEL, BLD_LEVEL, 1 AS INFO
+      FROM TABLE(SYSPROC.ENV_GET_INST_INFO()) AS T
+    labels:
+      inst_name: db2_instance
+      service_level: service_level
+      bld_level: build_level
+    metrics:
+      - column: info
+        name: db2_instance_info
+        help: Db2-Version und Instanz (Wert immer 1)
+
+  - name: database_status
+    sql: |
+      SELECT MEMBER, DB_STATUS, 1 AS INFO,
+             (DAYS(CURRENT TIMESTAMP) - DAYS(DB_CONN_TIME)) * 86400
+               + MIDNIGHT_SECONDS(CURRENT TIMESTAMP) - MIDNIGHT_SECONDS(DB_CONN_TIME) AS UPTIME_SECONDS,
+             CASE WHEN LAST_BACKUP IS NULL THEN NULL ELSE
+               (DAYS(CURRENT TIMESTAMP) - DAYS(LAST_BACKUP)) * 86400
+               + MIDNIGHT_SECONDS(CURRENT TIMESTAMP) - MIDNIGHT_SECONDS(LAST_BACKUP) END AS BACKUP_AGE_SECONDS
+      FROM TABLE(MON_GET_DATABASE(-2)) AS T
+    labels:
+      member: member
+      db_status: status
+    metrics:
+      - column: info
+        name: db2_database_status
+        help: Datenbankstatus als Label (ACTIVE, QUIESCED, ROLLFWD, ...)
+      - column: uptime_seconds
+        name: db2_database_uptime_seconds
+        help: Sekunden seit Aktivierung der Datenbank
+      - column: backup_age_seconds
+        name: db2_database_last_backup_age_seconds
+        help: Sekunden seit dem letzten erfolgreichen Backup
+
+  # ---------------------------------------------------------- Verbindungen
+  - name: database_connections
+    sql: |
+      SELECT MEMBER, APPLS_CUR_CONS, APPLS_IN_DB2, CONNECTIONS_TOP, TOTAL_CONS
+      FROM TABLE(MON_GET_DATABASE(-2)) AS T
+    labels:
+      member: member
+    metrics:
+      - {column: appls_cur_cons, name: db2_connections_current, help: Aktuell verbundene Applikationen}
+      - {column: appls_in_db2, name: db2_connections_executing, help: Applikationen die gerade in Db2 arbeiten}
+      - {column: connections_top, name: db2_connections_top, help: Hoechststand gleichzeitiger Verbindungen seit Aktivierung}
+      - {column: total_cons, name: db2_connections_total, type: counter, help: Verbindungen seit Aktivierung}
+
+  - name: connections_by_application
+    sql: |
+      SELECT MEMBER, APPLICATION_NAME, COALESCE(SYSTEM_AUTH_ID, '') AS AUTH_ID, COUNT(*) AS CNT
+      FROM TABLE(MON_GET_CONNECTION(NULL, -2)) AS T
+      GROUP BY MEMBER, APPLICATION_NAME, COALESCE(SYSTEM_AUTH_ID, '')
+    labels:
+      member: member
+      application_name: application
+      auth_id: auth_id
+    metrics:
+      - {column: cnt, name: db2_connections_by_application, help: Verbindungen je Applikation und Benutzer}
+
+  # ------------------------------------------------------- Bufferpools & I/O
+  - name: bufferpools
+    sql: |
+      SELECT MEMBER, BP_NAME,
+             POOL_DATA_L_READS + POOL_TEMP_DATA_L_READS AS DATA_L_READS,
+             POOL_DATA_P_READS + POOL_TEMP_DATA_P_READS AS DATA_P_READS,
+             POOL_INDEX_L_READS + POOL_TEMP_INDEX_L_READS AS INDEX_L_READS,
+             POOL_INDEX_P_READS + POOL_TEMP_INDEX_P_READS AS INDEX_P_READS,
+             POOL_DATA_WRITES, POOL_INDEX_WRITES,
+             POOL_READ_TIME, POOL_WRITE_TIME
+      FROM TABLE(MON_GET_BUFFERPOOL('', -2)) AS T
+      WHERE BP_NAME NOT LIKE 'IBMSYSTEMBP%'
+    labels:
+      member: member
+      bp_name: bufferpool
+    metrics:
+      - {column: data_l_reads, name: db2_bufferpool_data_logical_reads_total, type: counter, help: Logische Daten-Reads}
+      - {column: data_p_reads, name: db2_bufferpool_data_physical_reads_total, type: counter, help: Physische Daten-Reads}
+      - {column: index_l_reads, name: db2_bufferpool_index_logical_reads_total, type: counter, help: Logische Index-Reads}
+      - {column: index_p_reads, name: db2_bufferpool_index_physical_reads_total, type: counter, help: Physische Index-Reads}
+      - {column: pool_data_writes, name: db2_bufferpool_data_writes_total, type: counter, help: Geschriebene Datenseiten}
+      - {column: pool_index_writes, name: db2_bufferpool_index_writes_total, type: counter, help: Geschriebene Indexseiten}
+      - {column: pool_read_time, name: db2_bufferpool_read_time_ms_total, type: counter, help: Physische Lesezeit in ms}
+      - {column: pool_write_time, name: db2_bufferpool_write_time_ms_total, type: counter, help: Physische Schreibzeit in ms}
+
+  - name: database_io
+    sql: |
+      SELECT MEMBER, DIRECT_READS, DIRECT_WRITES, DIRECT_READ_TIME, DIRECT_WRITE_TIME
+      FROM TABLE(MON_GET_DATABASE(-2)) AS T
+    labels:
+      member: member
+    metrics:
+      - {column: direct_reads, name: db2_direct_reads_total, type: counter, help: Direct Reads (LOBs, LONG)}
+      - {column: direct_writes, name: db2_direct_writes_total, type: counter, help: Direct Writes (LOBs, LONG)}
+      - {column: direct_read_time, name: db2_direct_read_time_ms_total, type: counter, help: Zeit fuer Direct Reads in ms}
+      - {column: direct_write_time, name: db2_direct_write_time_ms_total, type: counter, help: Zeit fuer Direct Writes in ms}
+
+  # ------------------------------------------------------- Tablespaces & Logs
+  - name: tablespaces
+    sql: |
+      SELECT MEMBER, TBSP_NAME, TBSP_TYPE, TBSP_CONTENT_TYPE, TBSP_STATE,
+             TBSP_TOTAL_PAGES * TBSP_PAGE_SIZE  AS TOTAL_BYTES,
+             TBSP_USABLE_PAGES * TBSP_PAGE_SIZE AS USABLE_BYTES,
+             TBSP_USED_PAGES * TBSP_PAGE_SIZE   AS USED_BYTES,
+             TBSP_FREE_PAGES * TBSP_PAGE_SIZE   AS FREE_BYTES,
+             CASE WHEN TBSP_MAX_SIZE > 0 THEN TBSP_MAX_SIZE END AS MAX_BYTES,
+             TBSP_AUTO_RESIZE_ENABLED AS AUTO_RESIZE
+      FROM TABLE(MON_GET_TABLESPACE('', -2)) AS T
+    labels:
+      member: member
+      tbsp_name: tablespace
+      tbsp_type: type
+      tbsp_content_type: content
+      tbsp_state: state
+    metrics:
+      - {column: total_bytes, name: db2_tablespace_total_bytes, help: Allokierte Groesse}
+      - {column: usable_bytes, name: db2_tablespace_usable_bytes, help: Nutzbare Groesse}
+      - {column: used_bytes, name: db2_tablespace_used_bytes, help: Belegte Groesse}
+      - {column: free_bytes, name: db2_tablespace_free_bytes, help: Freier Platz}
+      - {column: max_bytes, name: db2_tablespace_max_bytes, help: MAXSIZE (nur wenn gesetzt)}
+      - {column: auto_resize, name: db2_tablespace_auto_resize, help: 1 wenn AUTORESIZE aktiv}
+
+  # Dateisysteme der Automatic-Storage-Pfade (wichtig bei AUTORESIZE ohne MAXSIZE)
+  - name: storage_paths
+    sql: |
+      SELECT DBPARTITIONNUM AS MEMBER, STORAGE_GROUP_NAME, DB_STORAGE_PATH,
+             FS_TOTAL_SIZE, FS_USED_SIZE, STO_PATH_FREE_SIZE
+      FROM TABLE(ADMIN_GET_STORAGE_PATHS('', -2)) AS T
+    labels:
+      member: member
+      storage_group_name: storage_group
+      db_storage_path: path
+    metrics:
+      - {column: fs_total_size, name: db2_storage_path_fs_total_bytes, help: Groesse des Dateisystems}
+      - {column: fs_used_size, name: db2_storage_path_fs_used_bytes, help: Belegung des Dateisystems}
+      - {column: sto_path_free_size, name: db2_storage_path_free_bytes, help: Freier Platz fuer den Storage-Pfad}
+
+  - name: transaction_log
+    sql: |
+      SELECT MEMBER, TOTAL_LOG_USED, TOTAL_LOG_AVAILABLE, TOT_LOG_USED_TOP, SEC_LOG_USED_TOP,
+             LOG_WRITES, LOG_READS, NUM_LOG_WRITE_IO, LOG_WRITE_TIME,
+             CURRENT_ACTIVE_LOG - FIRST_ACTIVE_LOG AS ACTIVE_LOG_FILES
+      FROM TABLE(MON_GET_TRANSACTION_LOG(-2)) AS T
+    labels:
+      member: member
+    metrics:
+      - {column: total_log_used, name: db2_log_used_bytes, help: Belegter aktiver Logspace}
+      - {column: total_log_available, name: db2_log_available_bytes, help: Freier aktiver Logspace (-1 bei Infinite Logging)}
+      - {column: tot_log_used_top, name: db2_log_used_top_bytes, help: Hoechststand belegter Logspace}
+      - {column: sec_log_used_top, name: db2_log_secondary_used_top_bytes, help: Hoechststand Secondary Logs}
+      - {column: log_writes, name: db2_log_pages_written_total, type: counter, help: Geschriebene Logseiten}
+      - {column: log_reads, name: db2_log_pages_read_total, type: counter, help: Gelesene Logseiten}
+      - {column: num_log_write_io, name: db2_log_write_io_total, type: counter, help: Log-Write-I/Os}
+      - {column: log_write_time, name: db2_log_write_time_ms_total, type: counter, help: Log-Schreibzeit in ms}
+      - {column: active_log_files, name: db2_log_active_files, help: Anzahl aktiver Logdateien (aktuell - erste)}
+
+  # -------------------------------------------------------- Locks & Sorts
+  - name: database_locks
+    sql: |
+      SELECT MEMBER, LOCK_WAITS, LOCK_WAIT_TIME, LOCK_TIMEOUTS, DEADLOCKS, LOCK_ESCALS,
+             NUM_LOCKS_HELD, NUM_LOCKS_WAITING, LOCK_LIST_IN_USE,
+             TOTAL_SORTS, SORT_OVERFLOWS, ACTIVE_SORTS
+      FROM TABLE(MON_GET_DATABASE(-2)) AS T
+    labels:
+      member: member
+    metrics:
+      - {column: lock_waits, name: db2_lock_waits_total, type: counter, help: Lock-Waits}
+      - {column: lock_wait_time, name: db2_lock_wait_time_ms_total, type: counter, help: Lock-Wartezeit in ms}
+      - {column: lock_timeouts, name: db2_lock_timeouts_total, type: counter, help: Lock-Timeouts}
+      - {column: deadlocks, name: db2_deadlocks_total, type: counter, help: Deadlocks}
+      - {column: lock_escals, name: db2_lock_escalations_total, type: counter, help: Lock-Eskalationen}
+      - {column: num_locks_held, name: db2_locks_held, help: Aktuell gehaltene Locks}
+      - {column: num_locks_waiting, name: db2_locks_waiting, help: Aktuell auf Locks wartende Agents}
+      - {column: lock_list_in_use, name: db2_lock_list_in_use_bytes, help: Belegte Locklist}
+      - {column: total_sorts, name: db2_sorts_total, type: counter, help: Sorts}
+      - {column: sort_overflows, name: db2_sort_overflows_total, type: counter, help: Sort-Overflows}
+      - {column: active_sorts, name: db2_sorts_active, help: Aktive Sorts}
+
+  - name: lock_waits_current
+    sql: |
+      SELECT W.MEMBER, W.LOCK_OBJECT_TYPE,
+             COALESCE(T.TABSCHEMA, '') AS TABSCHEMA, COALESCE(T.TABNAME, '') AS TABNAME,
+             COUNT(*) AS CNT,
+             MAX((DAYS(CURRENT TIMESTAMP) - DAYS(W.LOCK_WAIT_START_TIME)) * 86400
+                 + MIDNIGHT_SECONDS(CURRENT TIMESTAMP) - MIDNIGHT_SECONDS(W.LOCK_WAIT_START_TIME)) AS MAX_WAIT
+      FROM TABLE(MON_GET_APPL_LOCKWAIT(NULL, -2)) AS W
+      LEFT JOIN SYSCAT.TABLES T
+        ON T.TBSPACEID = W.TBSP_ID AND T.TABLEID = W.TAB_FILE_ID
+      GROUP BY W.MEMBER, W.LOCK_OBJECT_TYPE, COALESCE(T.TABSCHEMA, ''), COALESCE(T.TABNAME, '')
+    labels:
+      member: member
+      lock_object_type: object_type
+      tabschema: schema
+      tabname: table
+    metrics:
+      - {column: cnt, name: db2_lock_waits_current, help: Aktuelle Lock-Waits je Objekt}
+      - {column: max_wait, name: db2_lock_waits_current_max_seconds, help: Laengste aktuelle Wartezeit in Sekunden}
+
+  # ------------------------------------------------------- SQL-Durchsatz
+  - name: database_activity
+    sql: |
+      SELECT MEMBER, TOTAL_APP_COMMITS, TOTAL_APP_ROLLBACKS, ACT_COMPLETED_TOTAL, ACT_ABORTED_TOTAL,
+             ROWS_READ, ROWS_RETURNED, ROWS_MODIFIED,
+             TOTAL_CPU_TIME, TOTAL_RQST_TIME, TOTAL_WAIT_TIME, TOTAL_ACT_TIME, TOTAL_APP_RQST_TIME
+      FROM TABLE(MON_GET_DATABASE(-2)) AS T
+    labels:
+      member: member
+    metrics:
+      - {column: total_app_commits, name: db2_commits_total, type: counter, help: Commits der Applikationen}
+      - {column: total_app_rollbacks, name: db2_rollbacks_total, type: counter, help: Rollbacks der Applikationen}
+      - {column: act_completed_total, name: db2_activities_completed_total, type: counter, help: Abgeschlossene Aktivitaeten (Statements)}
+      - {column: act_aborted_total, name: db2_activities_aborted_total, type: counter, help: Abgebrochene Aktivitaeten}
+      - {column: rows_read, name: db2_rows_read_total, type: counter, help: Gelesene Zeilen}
+      - {column: rows_returned, name: db2_rows_returned_total, type: counter, help: Zurueckgegebene Zeilen}
+      - {column: rows_modified, name: db2_rows_modified_total, type: counter, help: Geaenderte Zeilen}
+      - {column: total_cpu_time, name: db2_cpu_time_us_total, type: counter, help: CPU-Zeit in Mikrosekunden}
+      - {column: total_rqst_time, name: db2_request_time_ms_total, type: counter, help: Request-Zeit in ms}
+      - {column: total_wait_time, name: db2_wait_time_ms_total, type: counter, help: Wartezeit in ms}
+      - {column: total_act_time, name: db2_activity_time_ms_total, type: counter, help: Ausfuehrungszeit der Aktivitaeten in ms}
+      - {column: total_app_rqst_time, name: db2_app_request_time_ms_total, type: counter, help: Request-Zeit aus Applikationssicht in ms}
+
+  # ------------------------------------------------------- Top-SQL
+  # Die 20 teuersten Statements im Package Cache (nach Ausfuehrungszeit).
+  # Achtung: Statement-Text als Label -> moderate Kardinalitaet. Bei Bedarf
+  # FETCH FIRST n reduzieren oder die Query entfernen.
+  - name: top_sql
+    label_max_length: 200
+    sql: |
+      SELECT MEMBER, HEX(EXECUTABLE_ID) AS STMT_ID, SECTION_TYPE,
+             CAST(SUBSTRING(STMT_TEXT, 1, 300, CODEUNITS32) AS VARCHAR(1200)) AS STMT,
+             NUM_EXECUTIONS, TOTAL_ACT_TIME, TOTAL_ACT_WAIT_TIME, TOTAL_CPU_TIME,
+             ROWS_READ, ROWS_RETURNED, ROWS_MODIFIED, LOCK_WAIT_TIME, TOTAL_SORTS
+      FROM TABLE(MON_GET_PKG_CACHE_STMT(NULL, NULL, NULL, -2)) AS T
+      ORDER BY TOTAL_ACT_TIME DESC
+      FETCH FIRST 20 ROWS ONLY
+    labels:
+      member: member
+      stmt_id: stmt_id
+      section_type: section_type
+      stmt: stmt
+    metrics:
+      - {column: num_executions, name: db2_stmt_executions, help: Ausfuehrungen seit Aufnahme in den Package Cache}
+      - {column: total_act_time, name: db2_stmt_activity_time_ms, help: Gesamte Ausfuehrungszeit in ms}
+      - {column: total_act_wait_time, name: db2_stmt_wait_time_ms, help: Wartezeit waehrend der Ausfuehrung in ms}
+      - {column: total_cpu_time, name: db2_stmt_cpu_time_us, help: CPU-Zeit in Mikrosekunden}
+      - {column: rows_read, name: db2_stmt_rows_read, help: Gelesene Zeilen}
+      - {column: rows_returned, name: db2_stmt_rows_returned, help: Zurueckgegebene Zeilen}
+      - {column: rows_modified, name: db2_stmt_rows_modified, help: Geaenderte Zeilen}
+      - {column: lock_wait_time, name: db2_stmt_lock_wait_time_ms, help: Lock-Wartezeit in ms}
+      - {column: total_sorts, name: db2_stmt_sorts, help: Sorts}

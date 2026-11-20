@@ -1,0 +1,62 @@
+# Db2-Monitoring: Exporter -> Prometheus -> Grafana
+# Start:  podman compose up -d --build
+# (funktioniert genauso mit podman-compose oder docker compose)
+
+name: db2-monitoring
+
+services:
+  db2-exporter:
+    build:
+      context: ./exporter
+      dockerfile: Containerfile
+    image: localhost/db2-exporter:latest
+    container_name: db2-exporter
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      EXPORTER_TARGETS_FILE: /etc/db2-exporter/targets.yaml
+      EXPORTER_QUERIES_FILE: /etc/db2-exporter/queries.yaml
+    volumes:
+      - ./config/exporter:/etc/db2-exporter:ro,Z
+    ports:
+      - "${EXPORTER_PORT:-9953}:9953"
+
+  prometheus:
+    image: docker.io/prom/prometheus:${PROMETHEUS_VERSION:-v3.5.0}
+    container_name: db2-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./config/prometheus:/etc/prometheus:ro,Z
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - db2-exporter
+
+  grafana:
+    image: docker.io/grafana/grafana:${GRAFANA_VERSION:-12.1.0}
+    container_name: db2-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/db2-overview.json
+      GF_DEFAULT_TIMEZONE: ${TZ:-Europe/Berlin}
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro,Z
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro,Z
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus-data:
+  grafana-data:

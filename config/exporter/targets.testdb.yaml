@@ -1,0 +1,24 @@
+# Targets fuer den Testbetrieb mit dem Db2-Community-Container (compose.testdb.yaml).
+# Die externe Datenbank aus targets.yaml wird zusaetzlich ueberwacht, wenn DB2_HOST gesetzt ist -
+# dafuer den Block unten einkommentieren.
+
+query_timeout_seconds: 20
+
+targets:
+  - name: TESTDB
+    host: db2-test
+    port: 50000
+    database: ${DB2_TEST_DBNAME:-TESTDB}
+    user: db2inst1
+    password_env: DB2_TEST_PASSWORD
+    labels:
+      env: test
+
+  # - name: ${DB2_NAME:-PRODDB}
+  #   host: ${DB2_HOST}
+  #   port: ${DB2_PORT:-50000}
+  #   database: ${DB2_DATABASE}
+  #   user: ${DB2_USER:-db2mon}
+  #   password_env: DB2_PASSWORD
+  #   labels:
+  #     env: ${DB2_ENV:-prod}

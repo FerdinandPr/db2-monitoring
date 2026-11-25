@@ -3,13 +3,16 @@
 Container-basierte Monitoring-Umgebung für Db2 LUW (11.1 oder neuer):
 
 ```
-Db2  ──SQL (MON_GET_*)──▶  db2-exporter  ──/metrics──▶  Prometheus  ──▶  Grafana
-                           (Python, ibm_db)              (+ Alert-Regeln)   (2 Dashboards)
+Db2  ──SQL (MON_GET_*)──▶  db2-exporter  ──/metrics──▶  Prometheus ──┐
+                           (Python, ibm_db)              (+ Alerts)     ├──▶  Grafana
+db2diag -f -json ────────▶ db2diag-shipper ──push──────▶  Loki ───────┘     (3 Dashboards)
+                           (auf dem Db2-Server)          (+ Alerts)
 ```
 
 - **db2-exporter**: kleiner Python-Exporter. Er führt die SQL-Abfragen aus `config/exporter/queries.yaml` bei jedem Scrape aus. Mehrere Datenbanken sind möglich.
 - **Prometheus**: speichert die Metriken (Standard: 30 Tage) und wertet die Alert-Regeln aus.
-- **Grafana**: Datasource und Dashboards werden beim Start automatisch eingerichtet (Provisioning).
+- **Loki** + **db2diag-shipper**: Der Shipper läuft auf dem Db2-Server, liest `db2diag -f -json` mit und schickt jeden Eintrag an Loki.
+- **Grafana**: Datasources und Dashboards werden beim Start automatisch eingerichtet (Provisioning).
 - **db2-test** (optional): Db2 Community Edition zum Ausprobieren.
 
 ## Schnellstart
@@ -50,6 +53,7 @@ Die Test-Datenbank wird als Instanzbesitzer `db2inst1` abgefragt. Die externe Da
 | Grafana    | http://localhost:3000            | Login aus `.env` (Standard admin/admin) |
 | Prometheus | http://localhost:9090            | Status → Targets, Alerts        |
 | Exporter   | http://localhost:9953/metrics    | Rohdaten des Exporters          |
+| Loki       | http://localhost:3100/ready      | Empfang der db2diag-Einträge    |
 
 ## Dashboards
 
@@ -69,6 +73,8 @@ Die Test-Datenbank wird als Instanzbesitzer `db2inst1` abgefragt. Die externe Da
 **Db2 Top SQL**: die 20 teuersten Statements aus dem Package Cache (nach `TOTAL_ACT_TIME`) mit Ausführungen, Ø-Zeit, CPU, Wartezeit, Lock-Wartezeit und Zeilen. Dazu die Statements, die gerade die meiste Last erzeugen.
 
 Die Dashboards sind in Grafana editierbar. Änderungen landen dann in der Grafana-Datenbank. Damit sie dauerhaft im Repo bleiben: *Export → Save to file* und die Datei unter `config/grafana/dashboards/` ersetzen.
+
+**Db2 diag.log**: Anzahl Critical/Severe/Error/Warning, Einträge je Level als Balken, die häufigsten ADM/SQL-Meldungen und die Einträge selbst (aufklappbar mit allen Feldern). Filter nach Host, Instanz, Level und Suchtext (Regex).
 
 ## Alerts
 
@@ -103,6 +109,59 @@ HADR wird über `MON_GET_HADR` am **Primary** überwacht. Das liefert eine Zeile
 - **Takeover**: Ist auf dem Server *Automatic Client Reroute* eingerichtet (`db2 update alternate server for database ...`), folgt der Exporter nach einem Takeover automatisch dem neuen Primary. Der Alert `Db2HadrRoleChanged` meldet den Wechsel. Ohne ACR meldet `Db2Down` den alten Primary als nicht erreichbar.
 - **Status-Labels**: Rolle, State und Verbindung stehen nur in `db2_hadr_info`. Die Zahlen-Metriken tragen nur stabile Labels (`standby_id`, `standby_host`, `syncmode`). So entstehen bei einem Statuswechsel keine neuen Zeitreihen.
 - **HADR_REPLAY_DELAY**: Ist eine Replay-Verzögerung absichtlich konfiguriert, den Schwellwert in `Db2HadrReplayDelayHigh` entsprechend erhöhen.
+
+## db2diag.log
+
+Der Shipper (`diag-shipper/db2diag_shipper.py`) läuft auf dem Db2-Server als Instanzbesitzer. Er startet `db2diag -f -json`, liest die JSON-Einträge laufend mit und schickt sie gesammelt an Loki. Er braucht nur Python 3.7 oder neuer, keine weiteren Pakete. Bricht `db2diag` ab, startet er es neu. Ist Loki nicht erreichbar, puffert er bis zu 20.000 Einträge und sendet sie später.
+
+**Was in Loki ankommt:**
+- Die Logzeile ist der komplette JSON-Eintrag. In Grafana Explore lässt sich damit per `| json` nach jedem Feld filtern.
+- Labels: `job=db2diag`, `host`, `db2_instance`, `db`, `member`, `level` (klein geschrieben: critical, severe, error, warning, info, event) und die Werte aus `EXTRA_LABELS`.
+- Zusätzliche Felder (Structured Metadata): `function`, `pid`, `tid`, `eduid`, `eduname`, `appid`, `apphdl`, `proc` und `msgid`. `msgid` ist die erste ADMxxxx- bzw. SQLxxxx-Nummer im Eintrag.
+- Der Zeitstempel kommt aus dem Eintrag selbst. Ist er älter als 6 Tage, wird die aktuelle Zeit verwendet, weil Loki so alte Einträge ablehnt. Der Originalwert steht dann in `db2_timestamp`.
+
+Die Feldnamen der JSON-Ausgabe werden unabhängig von der Schreibweise erkannt (`LEVEL`, `level`, `DB`, `dbname` …). Beim Start schreibt der Shipper die Felder des ersten Eintrags ins Log. Fehlt im Dashboard etwas, sieht man dort, wie die Felder heißen.
+
+### Installation auf einem Linux-Db2-Server (systemd)
+
+```bash
+cd diag-shipper
+sudo install -d /opt/db2diag-shipper
+sudo install -m 0755 db2diag_shipper.py /opt/db2diag-shipper/
+sudo install -m 0600 -o db2inst1 db2diag-shipper.env.example /etc/db2diag-shipper.env
+sudo vi /etc/db2diag-shipper.env          # LOKI_URL=http://<monitoring-host>:3100
+sudo install -m 0644 systemd/db2diag-shipper@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now db2diag-shipper@db2inst1     # @<Instanzbesitzer>
+journalctl -u db2diag-shipper@db2inst1 -f
+```
+
+Ohne systemd (z. B. zum Testen oder unter AIX):
+
+```bash
+. ~/sqllib/db2profile
+LOKI_URL=http://<monitoring-host>:3100 nohup python3 db2diag_shipper.py > db2diag_shipper.log 2>&1 &
+```
+
+Der Port 3100 des Monitoring-Hosts muss vom Db2-Server erreichbar sein. Loki läuft hier ohne Anmeldung. Wenn der Port außerhalb eines vertrauenswürdigen Netzes erreichbar ist, einen Reverse Proxy mit Basic Auth/TLS davorsetzen. Der Shipper unterstützt das über `LOKI_USERNAME`, `LOKI_PASSWORD` und `LOKI_CA_FILE`.
+
+### Test-Datenbank
+
+```bash
+./scripts/testdb-diag-shipper.sh
+```
+
+Das Skript kopiert den Shipper in den Container `db2-test` und startet ihn dort als `db2inst1`. Dafür braucht der Container `python3`. Nach einem Neustart des Containers das Skript erneut ausführen.
+
+### Alerts aus dem diag.log
+
+`config/loki/rules/fake/db2diag-alerts.yml` (Loki Ruler, in Grafana unter *Alerting* sichtbar):
+
+| Alert | Bedingung |
+|---|---|
+| Db2DiagSevere | mindestens ein Severe- oder Critical-Eintrag in 5 Minuten |
+| Db2DiagErrorsHigh | mehr als 20 Errors in 15 Minuten |
+| Db2DiagSilent | 6 Stunden lang kein Eintrag von einem Host (Shipper läuft nicht?) |
 
 ## Berechtigungen
 
@@ -160,6 +219,7 @@ Danach `podman restart db2-exporter`. Spaltennamen sind unabhängig von Groß-/K
 | `PROMETHEUS_RETENTION` | `30d` | Aufbewahrung der Metriken |
 | `GRAFANA_VERSION` / `PROMETHEUS_VERSION` | `12.1.0` / `v3.5.0` | Image-Versionen |
 | `DB2_TEST_IMAGE` | `icr.io/db2_community/db2:latest` | Image der Test-DB |
+| `LOKI_RETENTION` | `30d` | Aufbewahrung der db2diag-Einträge |
 | `LOG_LEVEL` | `INFO` | `DEBUG` für mehr Exporter-Ausgaben |
 
 ## Betrieb
@@ -212,7 +272,10 @@ compose.testdb.yaml              optionale Db2-Testdatenbank
 exporter/                        Containerfile + Python-Exporter
 config/exporter/                 targets.yaml, targets.testdb.yaml, queries.yaml, certs/
 config/prometheus/               prometheus.yml, rules/db2-alerts.yml
+config/loki/                     loki.yaml, rules/fake/db2diag-alerts.yml
 config/grafana/                  Provisioning + Dashboards (JSON)
+diag-shipper/                    db2diag-Shipper, systemd-Unit, Beispiel-Konfiguration
 sql/grants.sql                   Rechte für den Monitoring-Benutzer
 scripts/workload.sh              Testlast für die Test-Datenbank
+scripts/testdb-diag-shipper.sh   Shipper im Test-Container starten
 ```

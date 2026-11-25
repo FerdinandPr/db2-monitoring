@@ -1,0 +1,25 @@
+# Alert-Regeln auf Basis der db2diag-Eintraege (Loki Ruler).
+# Sichtbar in Grafana unter Alerting -> Alert rules (Datenquelle Loki).
+# "fake" ist der Tenant-Name von Loki ohne Authentifizierung.
+
+groups:
+  - name: db2diag
+    rules:
+      - alert: Db2DiagSevere
+        expr: sum by (host, db2_instance, db) (count_over_time({job="db2diag", level=~"severe|critical"}[5m])) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "db2diag {{ $labels.host }}/{{ $labels.db2_instance }}: {{ $value }} Severe/Critical-Eintraege in 5 Minuten"
+
+      - alert: Db2DiagErrorsHigh
+        expr: sum by (host, db2_instance, db) (count_over_time({job="db2diag", level="error"}[15m])) > 20
+        labels: {severity: warning}
+        annotations:
+          summary: "db2diag {{ $labels.host }}/{{ $labels.db2_instance }}: {{ $value }} Errors in 15 Minuten"
+
+      - alert: Db2DiagSilent
+        # Shipper laeuft nicht mehr oder Loki bekommt nichts (Db2 schreibt regelmaessig Info-Eintraege)
+        expr: sum by (host) (count_over_time({job="db2diag"}[6h])) == 0
+        labels: {severity: info}
+        annotations:
+          summary: "Seit 6 Stunden keine db2diag-Eintraege von {{ $labels.host }}"

@@ -1,4 +1,4 @@
-# Db2-Monitoring: Exporter -> Prometheus -> Grafana
+# Db2-Monitoring: Exporter -> Prometheus -> Grafana, db2diag-Shipper -> Loki -> Grafana
 # Start:  podman compose up -d --build
 # (funktioniert genauso mit podman-compose oder docker compose)
 
@@ -38,6 +38,22 @@ services:
     depends_on:
       - db2-exporter
 
+  loki:
+    image: docker.io/grafana/loki:${LOKI_VERSION:-3.5.0}
+    container_name: db2-loki
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/loki/loki.yaml
+      - -config.expand-env=true
+    environment:
+      LOKI_RETENTION: ${LOKI_RETENTION:-30d}
+    volumes:
+      - ./config/loki/loki.yaml:/etc/loki/loki.yaml:ro,Z
+      - ./config/loki/rules:/etc/loki/rules:ro,Z
+      - loki-data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"   # Shipper auf den Db2-Servern pushen hierhin
+
   grafana:
     image: docker.io/grafana/grafana:${GRAFANA_VERSION:-12.1.0}
     container_name: db2-grafana
@@ -56,7 +72,9 @@ services:
       - "${GRAFANA_PORT:-3000}:3000"
     depends_on:
       - prometheus
+      - loki
 
 volumes:
   prometheus-data:
   grafana-data:
+  loki-data:

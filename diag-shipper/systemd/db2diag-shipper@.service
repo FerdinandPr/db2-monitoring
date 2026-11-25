@@ -1,0 +1,27 @@
+# systemd-Unit fuer den db2diag-Shipper, eine Instanz je Db2-Instanz.
+# Installation (als root):
+#   install -d /opt/db2diag-shipper
+#   install -m 0755 db2diag_shipper.py /opt/db2diag-shipper/
+#   install -m 0600 -o db2inst1 db2diag-shipper.env.example /etc/db2diag-shipper.env   (anpassen!)
+#   install -m 0644 systemd/db2diag-shipper@.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now db2diag-shipper@db2inst1
+#   journalctl -u db2diag-shipper@db2inst1 -f
+
+[Unit]
+Description=db2diag-Shipper fuer Db2-Instanz %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=%i
+EnvironmentFile=/etc/db2diag-shipper.env
+# db2profile laden, damit db2diag und DB2INSTANCE gesetzt sind
+ExecStart=/bin/bash -c '. ~%i/sqllib/db2profile && exec /usr/bin/python3 /opt/db2diag-shipper/db2diag_shipper.py'
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

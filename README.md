@@ -181,6 +181,28 @@ podman compose down -v                # stoppen und alle Daten löschen
 - **ARM64** (z. B. Apple Silicon) wird vom IBM-Treiber in `ibm_db` nicht unterstützt. Dort den Exporter mit `--platform linux/amd64` bauen.
 - **SELinux**: Die Volumes sind mit `:Z` gemountet und funktionieren deshalb unter Podman auf Fedora/RHEL.
 
+## Debugging
+
+Möchte man wissen warum Werte auf dem Board offensichtlich nicht stimmen so kann man sich 
+- das Log anschauen
+- wenn bspw. eine DB nicht erreichbar ist, diesen Check interaktiv ausführen
+- 
+### Log anschauen
+
+```bash
+podman logs --tail 50 db2-exporter
+```
+
+### interaktiv
+
+```bash
+podman exec -it db2-exporter python -c "
+import os, ibm_db
+cs = f\"DATABASE={os.environ['DB2_DATABASE']};HOSTNAME={os.environ['DB2_HOST']};PORT={os.environ.get('DB2_PORT','50000')};PROTOCOL=TCPIP;UID={os.environ['DB2_USER']};PWD={os.environ['DB2_PASSWORD']};\"
+print('Ziel:', os.environ['DB2_HOST'], os.environ.get('DB2_PORT'))
+c = ibm_db.connect(cs, '', ''); print('Verbindung OK')"
+```
+
 ## Struktur
 
 ```

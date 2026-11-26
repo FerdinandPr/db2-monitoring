@@ -1,0 +1,14 @@
+# Target des Sidecar-Stacks: die Db2-Datenbank im Container "db2" (sidecar/compose.yaml).
+# Ist beim Start schon eingetragen, es muss nichts registriert werden.
+
+query_timeout_seconds: 20
+
+targets:
+  - name: ${DB2_DBNAME:-TESTDB}        # Wert des Labels "db" in Prometheus/Grafana
+    host: db2
+    port: 50000
+    database: ${DB2_DBNAME:-TESTDB}
+    user: db2inst1
+    password_env: DB2_PASSWORD
+    labels:
+      env: test

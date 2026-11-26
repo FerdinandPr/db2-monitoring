@@ -1,0 +1,13 @@
+# db2diag-Sidecar: liest db2diag.log aus dem geteilten Db2-Volume und schickt die Eintraege an Loki.
+# Build-Kontext ist das Repo-Wurzelverzeichnis (siehe sidecar/compose.yaml),
+# damit der vorhandene Shipper (diag-shipper/db2diag_shipper.py) mitgenutzt wird.
+FROM docker.io/library/python:3.12-slim
+
+WORKDIR /app
+COPY diag-shipper/db2diag_shipper.py /app/
+COPY sidecar/diag-sidecar/db2diag_file_shipper.py /app/
+
+# Laeuft als root, damit db2diag.log unabhaengig von UID/Rechten des
+# Instanzbesitzers lesbar ist. Das Db2-Volume wird nur read-only eingebunden.
+VOLUME ["/state"]
+ENTRYPOINT ["python", "-u", "/app/db2diag_file_shipper.py"]

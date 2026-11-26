@@ -1,0 +1,140 @@
+# Sidecar-Stack: Db2 + db2diag-Sidecar + Loki + Exporter + Prometheus + Grafana in einem Compose-Projekt.
+# Alles ist vorkonfiguriert: Db2 ist als Target eingetragen, die Logs gehen ueber den Sidecar an Loki.
+#
+# Start (im Ordner sidecar/):   podman compose up -d --build
+# Erster Start: Db2 legt Instanz und Datenbank an (einige Minuten).
+# Ohne .env laufen die Standardwerte; zum Anpassen: cp .env.example .env
+
+name: db2-sidecar
+
+services:
+  # ------------------------------------------------------------ Db2
+  db2:
+    image: ${DB2_IMAGE:-icr.io/db2_community/db2:latest}
+    container_name: sc-db2
+    hostname: db2-sidecar
+    privileged: true            # von der Db2 Community Edition vorausgesetzt
+    restart: unless-stopped
+    environment:
+      LICENSE: accept
+      DB2INSTANCE: db2inst1
+      DB2INST1_PASSWORD: ${DB2_PASSWORD:-Db2Sidecar-Passw0rd}
+      DBNAME: ${DB2_DBNAME:-TESTDB}
+      ARCHIVE_LOGS: "false"
+      AUTOCONFIG: "false"
+      PERSISTENT_HOME: "true"   # Home + sqllib/db2dump liegen im Volume -> Sidecar sieht db2diag.log
+    volumes:
+      - db2-data:/database
+    ports:
+      - "${DB2_PORT:-50000}:50000"
+    healthcheck:
+      test: ["CMD-SHELL", "su - db2inst1 -c 'db2 connect to ${DB2_DBNAME:-TESTDB} >/dev/null && db2 terminate >/dev/null'"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 15m
+
+  # ------------------------------------------------------------ Sidecar: db2diag.log -> Loki
+  db2diag-sidecar:
+    build:
+      context: ..
+      dockerfile: sidecar/diag-sidecar/Containerfile
+    image: localhost/db2diag-sidecar:latest
+    container_name: sc-db2diag-sidecar
+    restart: unless-stopped
+    environment:
+      LOKI_URL: http://loki:3100
+      HOST_LABEL: db2-sidecar
+      EXTRA_LABELS: env=test
+      START_AT: beginning
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - db2-data:/database:ro       # dasselbe Volume wie der Db2-Container, nur lesend
+      - sidecar-state:/state        # Leseposition, damit nach Neustart nichts doppelt kommt
+    depends_on:
+      - db2
+      - loki
+
+  # ------------------------------------------------------------ Monitor
+  db2-exporter:
+    build:
+      context: ../exporter
+      dockerfile: Containerfile
+    image: localhost/db2-exporter:latest
+    container_name: sc-db2-exporter
+    restart: unless-stopped
+    environment:
+      DB2_DBNAME: ${DB2_DBNAME:-TESTDB}
+      DB2_PASSWORD: ${DB2_PASSWORD:-Db2Sidecar-Passw0rd}
+      EXPORTER_TARGETS_FILE: /etc/db2-exporter/targets.yaml
+      EXPORTER_QUERIES_FILE: /etc/db2-exporter/queries.yaml
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - ./config/exporter/targets.yaml:/etc/db2-exporter/targets.yaml:ro,Z
+      - ../config/exporter/queries.yaml:/etc/db2-exporter/queries.yaml:ro,z
+    ports:
+      - "${EXPORTER_PORT:-9953}:9953"
+    depends_on:
+      - db2
+
+  prometheus:
+    image: docker.io/prom/prometheus:${PROMETHEUS_VERSION:-v3.5.0}
+    container_name: sc-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+      - --web.enable-lifecycle
+    volumes:
+      - ../config/prometheus:/etc/prometheus:ro,z
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - db2-exporter
+
+  loki:
+    image: docker.io/grafana/loki:${LOKI_VERSION:-3.5.0}
+    container_name: sc-loki
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/loki/loki.yaml
+      - -config.expand-env=true
+    environment:
+      LOKI_RETENTION: ${LOKI_RETENTION:-30d}
+    volumes:
+      - ../config/loki/loki.yaml:/etc/loki/loki.yaml:ro,z
+      - ../config/loki/rules:/etc/loki/rules:ro,z
+      - loki-data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+
+  grafana:
+    image: docker.io/grafana/grafana:${GRAFANA_VERSION:-12.1.0}
+    container_name: sc-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/db2-overview.json
+      GF_DEFAULT_TIMEZONE: ${TZ:-Europe/Berlin}
+    volumes:
+      - ../config/grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - ../config/grafana/dashboards:/var/lib/grafana/dashboards:ro,z
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+      - loki
+
+volumes:
+  db2-data:
+  sidecar-state:
+  prometheus-data:
+  grafana-data:
+  loki-data:

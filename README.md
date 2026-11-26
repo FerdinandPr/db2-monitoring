@@ -54,6 +54,8 @@ Eigenständiges Compose-Projekt im Ordner [`sidecar/`](sidecar/README.md): Db2-C
 cd sidecar && podman compose up -d --build
 ```
 
+![Architektur des Sidecar-Stacks](sidecar/docs/architektur.svg)
+
 ### Aufrufen
 
 | Dienst     | URL                              | Hinweis                         |

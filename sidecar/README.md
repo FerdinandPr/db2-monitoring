@@ -2,15 +2,7 @@
 
 Ein eigenständiges Compose-Projekt im Ordner `sidecar/`. Ein Befehl startet alles, und es ist fertig eingerichtet:
 
-```
-┌─ sc-db2 ─────────────────────┐   Volume db2-data   ┌─ sc-db2diag-sidecar ─────────────┐
-│  Db2 Community, TESTDB        │ ◀──── (ro) ───────▶ │  Db2-Image, keine Instanz         │
-│  Instanz in /database/config  │                     │  db2diag -f -json                 │
-└──────────────┬────────────────┘                     │  └▶ db2diag_shipper.py ──push──▶ Loki ──┐
-               │ SQL (MON_GET_*)                      └───────────────────────────────────┘     ├──▶ Grafana
-               ▼                                                                                 │
-          db2-exporter ──/metrics──▶ Prometheus ────────────────────────────────────────────────┘
-```
+![Architektur des Sidecar-Stacks](docs/architektur.svg)
 
 - **db2** (`sc-db2`): Db2 Community Edition. Mit `PERSISTENT_HOME=true` liegt das Home von `db2inst1` mit `sqllib` und `db2dump` im Volume `db2-data`.
 - **db2diag-sidecar** (`sc-db2diag-sidecar`): eigener Container für den Shipper. Er basiert auf demselben Db2-Image, damit `db2diag` vorhanden ist, startet aber keine Instanz. Er bindet `db2-data` **read-only** ein und betreibt den unveränderten `../diag-shipper/db2diag_shipper.py` mit `db2diag -f -json`. Labels, Felder und Dashboards sind also dieselben wie beim Shipper auf einem echten Db2-Server.

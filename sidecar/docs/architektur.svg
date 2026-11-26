@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 640" width="960" height="640" font-family="DejaVu Sans, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#37474f"/>
+    </marker>
+    <style>
+      .title { font-size: 20px; font-weight: bold; fill: #263238; }
+      .sub   { font-size: 13px; fill: #546e7a; }
+      .bname { font-size: 15px; font-weight: bold; fill: #1b2a33; }
+      .cname { font-size: 11.5px; fill: #455a64; font-family: DejaVu Sans Mono, Consolas, monospace; }
+      .txt   { font-size: 12.5px; fill: #37474f; }
+      .mono  { font-size: 12px; fill: #37474f; font-family: DejaVu Sans Mono, Consolas, monospace; }
+      .lbl   { font-size: 11.5px; fill: #37474f; }
+      .flow  { stroke: #37474f; stroke-width: 1.8; fill: none; marker-end: url(#arr); }
+      .ro    { stroke: #37474f; stroke-width: 1.8; fill: none; stroke-dasharray: 6 4; marker-end: url(#arr); }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="640" fill="#ffffff"/>
+
+  <text x="30" y="36" class="title">Sidecar-Stack: Db2 + db2diag-Sidecar + Monitor</text>
+  <text x="30" y="58" class="sub">Ein Compose-Projekt (sidecar/compose.yaml) – podman compose up -d --build</text>
+
+  <!-- Gruppen -->
+  <rect x="20" y="78" width="300" height="470" rx="12" fill="#f3f8fd" stroke="#90b4d6" stroke-dasharray="5 4"/>
+  <text x="36" y="100" class="sub" font-weight="bold">Datenbank</text>
+  <rect x="350" y="78" width="590" height="470" rx="12" fill="#fafafa" stroke="#b0bec5" stroke-dasharray="5 4"/>
+  <text x="366" y="100" class="sub" font-weight="bold">Monitor (Konfiguration aus ../config)</text>
+
+  <!-- Db2 -->
+  <rect x="45" y="115" width="250" height="110" rx="10" fill="#dcebf9" stroke="#1f6fb5" stroke-width="1.6"/>
+  <text x="62" y="140" class="bname">Db2 Community Edition</text>
+  <text x="62" y="158" class="cname">sc-db2</text>
+  <text x="62" y="181" class="txt">Instanz db2inst1, DB TESTDB</text>
+  <text x="62" y="200" class="mono">PERSISTENT_HOME=true</text>
+  <text x="62" y="217" class="mono">:50000</text>
+
+  <!-- Volume -->
+  <path d="M75,272 a95,12 0 0,0 190,0 v62 a95,12 0 0,1 -190,0 z" fill="#fff4d6" stroke="#c99a1e" stroke-width="1.6"/>
+  <ellipse cx="170" cy="272" rx="95" ry="12" fill="#ffe9a8" stroke="#c99a1e" stroke-width="1.6"/>
+  <text x="170" y="302" class="bname" text-anchor="middle">Volume db2-data</text>
+  <text x="170" y="320" class="mono" text-anchor="middle">/database (Instanz-Home)</text>
+  <text x="170" y="336" class="mono" text-anchor="middle">sqllib, db2dump</text>
+
+  <!-- Sidecar -->
+  <rect x="45" y="395" width="250" height="135" rx="10" fill="#d9f2ec" stroke="#1d8a73" stroke-width="1.6"/>
+  <text x="62" y="420" class="bname">db2diag-Sidecar</text>
+  <text x="62" y="438" class="cname">sc-db2diag-sidecar</text>
+  <text x="62" y="461" class="txt">Db2-Image, keine Instanz</text>
+  <text x="62" y="480" class="mono">db2diag -f -json</text>
+  <text x="62" y="497" class="mono">  └▶ db2diag_shipper.py</text>
+  <text x="62" y="518" class="txt">läuft als db2inst1</text>
+
+  <!-- Exporter -->
+  <rect x="375" y="115" width="230" height="110" rx="10" fill="#ede7f6" stroke="#6a4fb0" stroke-width="1.6"/>
+  <text x="392" y="140" class="bname">db2-exporter</text>
+  <text x="392" y="158" class="cname">sc-db2-exporter</text>
+  <text x="392" y="181" class="txt">Python + ibm_db, MON_GET_*</text>
+  <text x="392" y="200" class="txt">Target TESTDB vorkonfiguriert</text>
+  <text x="392" y="217" class="mono">:9953/metrics</text>
+
+  <!-- Prometheus -->
+  <rect x="690" y="115" width="230" height="110" rx="10" fill="#fde7dd" stroke="#d2552b" stroke-width="1.6"/>
+  <text x="707" y="140" class="bname">Prometheus</text>
+  <text x="707" y="158" class="cname">sc-prometheus</text>
+  <text x="707" y="181" class="txt">Metriken (30 Tage)</text>
+  <text x="707" y="200" class="txt">Alert-Regeln db2-alerts.yml</text>
+  <text x="707" y="217" class="mono">:9090</text>
+
+  <!-- Loki -->
+  <rect x="375" y="405" width="230" height="115" rx="10" fill="#fff3d9" stroke="#d99a00" stroke-width="1.6"/>
+  <text x="392" y="430" class="bname">Loki</text>
+  <text x="392" y="448" class="cname">sc-loki</text>
+  <text x="392" y="471" class="txt">db2diag-Einträge (job=db2diag)</text>
+  <text x="392" y="490" class="txt">Ruler: db2diag-alerts.yml</text>
+  <text x="392" y="508" class="mono">:3100</text>
+
+  <!-- Grafana -->
+  <rect x="690" y="405" width="230" height="115" rx="10" fill="#fdeacc" stroke="#e07b00" stroke-width="1.6"/>
+  <text x="707" y="430" class="bname">Grafana</text>
+  <text x="707" y="448" class="cname">sc-grafana</text>
+  <text x="707" y="471" class="txt">Übersicht · Top SQL · diag.log</text>
+  <text x="707" y="490" class="txt">Datasources provisioniert</text>
+  <text x="707" y="508" class="mono">:3000</text>
+
+  <!-- Pfeile -->
+  <!-- Exporter -> Db2 -->
+  <line x1="375" y1="165" x2="298" y2="165" class="flow"/>
+  <text x="336" y="152" class="lbl" text-anchor="middle">SQL</text>
+    <!-- Prometheus -> Exporter -->
+  <line x1="690" y1="165" x2="608" y2="165" class="flow"/>
+  <text x="649" y="157" class="lbl" text-anchor="middle">scrape</text>
+  <!-- Db2 -> Volume -->
+  <line x1="170" y1="225" x2="170" y2="257" class="flow"/>
+  <text x="180" y="246" class="lbl">rw</text>
+  <!-- Sidecar -> Volume (ro) -->
+  <line x1="170" y1="395" x2="170" y2="350" class="ro"/>
+  <text x="180" y="378" class="lbl">read-only</text>
+  <!-- Sidecar -> Loki -->
+  <line x1="295" y1="462" x2="372" y2="462" class="flow"/>
+  <text x="334" y="453" class="lbl" text-anchor="middle">push</text>
+    <!-- Grafana -> Loki -->
+  <line x1="690" y1="462" x2="608" y2="462" class="flow"/>
+  <text x="649" y="454" class="lbl" text-anchor="middle">LogQL</text>
+  <!-- Grafana -> Prometheus -->
+  <line x1="805" y1="405" x2="805" y2="228" class="flow"/>
+  <text x="815" y="320" class="lbl">PromQL</text>
+
+  <!-- Legende -->
+  <line x1="30" y1="590" x2="70" y2="590" class="flow"/>
+  <text x="80" y="594" class="lbl">Abfrage / Datenfluss (Pfeil = Richtung der Anfrage)</text>
+  <line x1="420" y1="590" x2="460" y2="590" class="ro"/>
+  <text x="470" y="594" class="lbl">geteiltes Volume, nur lesend</text>
+  <text x="30" y="620" class="lbl">Browser: Grafana http://localhost:3000 · Prometheus :9090 · Loki :3100 · Exporter :9953 · Db2 :50000</text>
+</svg>

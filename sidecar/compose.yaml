@@ -1,5 +1,6 @@
 # Sidecar-Stack: Db2 + db2diag-Sidecar + Loki + Exporter + Prometheus + Grafana in einem Compose-Projekt.
-# Alles ist vorkonfiguriert: Db2 ist als Target eingetragen, die Logs gehen ueber den Sidecar an Loki.
+# Alles ist vorkonfiguriert: Db2 ist als Target eingetragen, der Sidecar liest
+# "db2diag -f -json" und schickt die Eintraege an Loki.
 #
 # Start (im Ordner sidecar/):   podman compose up -d --build
 # Erster Start: Db2 legt Instanz und Datenbank an (einige Minuten).
@@ -34,24 +35,28 @@ services:
       retries: 3
       start_period: 15m
 
-  # ------------------------------------------------------------ Sidecar: db2diag.log -> Loki
+  # ------------------------------------------------------------ Sidecar: db2diag -f -json -> Loki
+  # Eigener Container auf Basis des Db2-Images (fuer den Befehl db2diag),
+  # startet keine Instanz, sondern nur diag-shipper/db2diag_shipper.py.
   db2diag-sidecar:
     build:
       context: ..
       dockerfile: sidecar/diag-sidecar/Containerfile
+      args:
+        DB2_IMAGE: ${DB2_IMAGE:-icr.io/db2_community/db2:latest}
     image: localhost/db2diag-sidecar:latest
     container_name: sc-db2diag-sidecar
     restart: unless-stopped
     environment:
       LOKI_URL: http://loki:3100
+      DB2DIAG_CMD: db2diag -f -json
+      DB2INSTANCE: db2inst1
       HOST_LABEL: db2-sidecar
       EXTRA_LABELS: env=test
-      START_AT: beginning
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TZ: ${TZ:-Europe/Berlin}
     volumes:
       - db2-data:/database:ro       # dasselbe Volume wie der Db2-Container, nur lesend
-      - sidecar-state:/state        # Leseposition, damit nach Neustart nichts doppelt kommt
     depends_on:
       - db2
       - loki
@@ -134,7 +139,6 @@ services:
 
 volumes:
   db2-data:
-  sidecar-state:
   prometheus-data:
   grafana-data:
   loki-data:

@@ -48,7 +48,7 @@ Die Test-Datenbank wird als Instanzbesitzer `db2inst1` abgefragt. Die externe Da
 
 ### Variante 3: Sidecar-Stack (Db2 + db2diag-Sidecar + Monitor)
 
-Eigenständiges Compose-Projekt im Ordner [`sidecar/`](sidecar/README.md): Db2-Container, ein Sidecar, der `db2diag.log` aus dem geteilten Volume an Loki schickt, und der komplette Monitor. Alles ist vorkonfiguriert.
+Eigenständiges Compose-Projekt im Ordner [`sidecar/`](sidecar/README.md): Db2-Container, ein eigener Shipper-Container, der `db2diag -f -json` auf dem geteilten Instanz-Volume ausführt und an Loki schickt, und der komplette Monitor. Alles ist vorkonfiguriert.
 
 ```bash
 cd sidecar && podman compose up -d --build
@@ -120,7 +120,7 @@ HADR wird über `MON_GET_HADR` am **Primary** überwacht. Das liefert eine Zeile
 
 ## db2diag.log
 
-Der Shipper (`diag-shipper/db2diag_shipper.py`) läuft auf dem Db2-Server als Instanzbesitzer. Er startet `db2diag -f -json`, liest die JSON-Einträge laufend mit und schickt sie gesammelt an Loki. Er braucht nur Python 3.7 oder neuer, keine weiteren Pakete. Bricht `db2diag` ab, startet er es neu. Ist Loki nicht erreichbar, puffert er bis zu 20.000 Einträge und sendet sie später.
+Der Shipper (`diag-shipper/db2diag_shipper.py`) läuft auf dem Db2-Server als Instanzbesitzer. Er startet `db2diag -f -json`, liest die JSON-Einträge laufend mit und schickt sie gesammelt an Loki. Er braucht nur Python 3.6 oder neuer, keine weiteren Pakete. Bricht `db2diag` ab, startet er es neu. Ist Loki nicht erreichbar, puffert er bis zu 20.000 Einträge und sendet sie später.
 
 **Was in Loki ankommt:**
 - Die Logzeile ist der komplette JSON-Eintrag. In Grafana Explore lässt sich damit per `| json` nach jedem Feld filtern.

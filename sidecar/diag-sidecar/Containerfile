@@ -1,13 +1,22 @@
-# db2diag-Sidecar: liest db2diag.log aus dem geteilten Db2-Volume und schickt die Eintraege an Loki.
-# Build-Kontext ist das Repo-Wurzelverzeichnis (siehe sidecar/compose.yaml),
-# damit der vorhandene Shipper (diag-shipper/db2diag_shipper.py) mitgenutzt wird.
-FROM docker.io/library/python:3.12-slim
+# db2diag-Sidecar: eigener Container fuer den db2diag-Shipper.
+# Basis ist dasselbe Db2-Image wie der Datenbank-Container, damit "db2diag -f -json"
+# vorhanden ist. Instanz (sqllib, db2dump) kommt aus dem geteilten Volume.
+# Build-Kontext ist das Repo-Wurzelverzeichnis (siehe sidecar/compose.yaml).
+ARG DB2_IMAGE=icr.io/db2_community/db2:latest
+FROM ${DB2_IMAGE}
 
-WORKDIR /app
-COPY diag-shipper/db2diag_shipper.py /app/
-COPY sidecar/diag-sidecar/db2diag_file_shipper.py /app/
+USER root
 
-# Laeuft als root, damit db2diag.log unabhaengig von UID/Rechten des
-# Instanzbesitzers lesbar ist. Das Db2-Volume wird nur read-only eingebunden.
-VOLUME ["/state"]
-ENTRYPOINT ["python", "-u", "/app/db2diag_file_shipper.py"]
+# Der Shipper braucht python3 (nur Standardbibliothek, ab 3.6).
+RUN if ! command -v python3 >/dev/null 2>&1; then \
+      if command -v microdnf >/dev/null 2>&1; then microdnf install -y python3 && microdnf clean all; \
+      elif command -v dnf >/dev/null 2>&1; then dnf install -y python3 && dnf clean all; \
+      else yum install -y python3 && yum clean all; fi; \
+    fi \
+ && python3 --version
+
+COPY diag-shipper/db2diag_shipper.py /opt/db2diag-shipper/db2diag_shipper.py
+COPY sidecar/diag-sidecar/start-shipper.sh /opt/db2diag-shipper/start-shipper.sh
+
+# Ersetzt das Setup-Skript des Db2-Images: hier wird keine Instanz gestartet.
+ENTRYPOINT ["/bin/bash", "/opt/db2diag-shipper/start-shipper.sh"]

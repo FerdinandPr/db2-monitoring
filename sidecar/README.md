@@ -3,17 +3,17 @@
 Ein eigenständiges Compose-Projekt im Ordner `sidecar/`. Ein Befehl startet alles, und es ist fertig eingerichtet:
 
 ```
-┌─ Db2-Container (sc-db2) ───────┐        Volume db2-data (read-only)
-│  Db2 Community, TESTDB          │ ──────────────────────────┐
-│  .../sqllib/db2dump/db2diag.log │                           ▼
-└──────────────┬──────────────────┘              db2diag-sidecar ──push──▶ Loki ──┐
-               │ SQL (MON_GET_*)                 (liest db2diag.log)               ├──▶ Grafana
-               ▼                                                                    │
-          db2-exporter ──/metrics──▶ Prometheus ───────────────────────────────────┘
+┌─ sc-db2 ─────────────────────┐   Volume db2-data   ┌─ sc-db2diag-sidecar ─────────────┐
+│  Db2 Community, TESTDB        │ ◀──── (ro) ───────▶ │  Db2-Image, keine Instanz         │
+│  Instanz in /database/config  │                     │  db2diag -f -json                 │
+└──────────────┬────────────────┘                     │  └▶ db2diag_shipper.py ──push──▶ Loki ──┐
+               │ SQL (MON_GET_*)                      └───────────────────────────────────┘     ├──▶ Grafana
+               ▼                                                                                 │
+          db2-exporter ──/metrics──▶ Prometheus ────────────────────────────────────────────────┘
 ```
 
-- **db2** (`sc-db2`): Db2 Community Edition. Mit `PERSISTENT_HOME=true` liegen das Home von `db2inst1` und damit `sqllib/db2dump` im Volume `db2-data`.
-- **db2diag-sidecar**: bindet dasselbe Volume **read-only** ein und liest `db2diag.log` direkt als Datei. Die Datei braucht keinen `db2diag`-Befehl und keine Db2-Installation. Jeder Eintrag wird in seine Felder zerlegt (`TIMESTAMP`, `LEVEL`, `PID`, `INSTANCE`, `NODE`, `DB`, `FUNCTION`, `MESSAGE` …) und mit den gleichen Labels wie beim normalen Shipper an Loki geschickt. Die Dashboards und Loki-Alerts funktionieren deshalb unverändert.
+- **db2** (`sc-db2`): Db2 Community Edition. Mit `PERSISTENT_HOME=true` liegt das Home von `db2inst1` mit `sqllib` und `db2dump` im Volume `db2-data`.
+- **db2diag-sidecar** (`sc-db2diag-sidecar`): eigener Container für den Shipper. Er basiert auf demselben Db2-Image, damit `db2diag` vorhanden ist, startet aber keine Instanz. Er bindet `db2-data` **read-only** ein und betreibt den unveränderten `../diag-shipper/db2diag_shipper.py` mit `db2diag -f -json`. Labels, Felder und Dashboards sind also dieselben wie beim Shipper auf einem echten Db2-Server.
 - **Monitor**: Exporter, Prometheus, Loki und Grafana mit den Konfigurationen aus dem Hauptprojekt (`../config`). Die Datenbank ist in `config/exporter/targets.yaml` schon als Target eingetragen.
 
 ## Start
@@ -23,7 +23,8 @@ Voraussetzungen wie im Hauptprojekt: Podman (rootful Machine unter Windows/macOS
 ```bash
 cd sidecar
 podman compose up -d --build
-podman logs -f sc-db2                 # warten bis "Setup has completed" (einige Minuten)
+podman logs -f sc-db2                  # warten bis "Setup has completed" (einige Minuten)
+podman logs -f sc-db2diag-sidecar      # Shipper: "Erster Eintrag von db2diag, Felder: ..."
 ```
 
 Eine `.env` ist nicht nötig. Für eigene Passwörter oder Ports: `cp .env.example .env`.
@@ -46,30 +47,22 @@ DB2_CONTAINER=sc-db2 ../scripts/workload.sh 100
 
 Die Ports sind dieselben wie beim Hauptprojekt. Für einen Betrieb beider Stacks gleichzeitig die Ports in `.env` ändern. Die Containernamen beginnen mit `sc-`, deshalb gibt es keine Namenskonflikte.
 
-## Der Sidecar
+## Der Sidecar im Detail
 
-`diag-sidecar/db2diag_file_shipper.py` nutzt `RecordBuilder` und `LokiSender` aus `../diag-shipper/db2diag_shipper.py`. Neu ist nur das Lesen der Datei:
+Das Image (`diag-sidecar/Containerfile`):
+- Basis ist `DB2_IMAGE`, also dasselbe Image wie der Datenbank-Container. Die Links in `sqllib` zeigen dadurch auf eine passende Db2-Installation.
+- Fehlt `python3` im Image, wird es beim Bauen nachinstalliert (`microdnf`/`dnf`/`yum`). Der Shipper braucht nur die Standardbibliothek ab Python 3.6.
 
-- **Datei finden**: Standard ist `/database/config/*/sqllib/db2dump/DIAG*/db2diag.log`, danach `.../db2dump/db2diag.log`. Bei mehreren Treffern nimmt er die zuletzt geänderte Datei. Solange die Datei fehlt (Db2-Setup läuft), wartet er.
-- **Einträge erkennen**: Ein Eintrag beginnt mit dem Zeitstempel (`2026-11-26-11.00.01.123456+060 I1234E456  LEVEL: Info`). Er gilt als fertig, wenn der nächste beginnt oder 2 Sekunden lang nichts dazukommt. So werden halb geschriebene Einträge nicht zerrissen.
-- **Logzeile in Loki**: JSON mit den erkannten Feldern, `RAW` enthält den kompletten Originaleintrag inklusive `DATA #n`-Blöcken.
-- **Position**: wird im Volume `sidecar-state` gespeichert. Nach einem Neustart des Sidecars kommt nichts doppelt.
-- **Rotation**: Eine neue Datei (anderer Inode, z. B. nach `db2diag -A` oder durch `DIAGSIZE`) wird erkannt. Der Rest der alten Datei wird vorher noch gelesen. Wird die Datei gekürzt, liest er von vorne.
+Der Start (`diag-sidecar/start-shipper.sh`):
+1. wartet, bis `/database/config/db2inst1/sqllib/db2profile` existiert, also das Db2-Setup die Instanz angelegt hat,
+2. legt den Benutzer `db2inst1` mit derselben UID/GID wie `sqllib` im Volume an,
+3. lädt `db2profile` und startet den Shipper als `db2inst1`.
 
-Einstellungen (Umgebungsvariablen im Service `db2diag-sidecar`):
+Danach gilt alles, was im Haupt-README unter *db2diag.log* steht: Neustart von `db2diag`, wenn es abbricht (zum Beispiel solange `db2diag.log` noch nicht existiert), Puffer bei nicht erreichbarem Loki, Labels und Structured Metadata.
 
-| Variable | Standard | Bedeutung |
-|---|---|---|
-| `LOKI_URL` | `http://loki:3100` | Ziel |
-| `HOST_LABEL` | `db2-sidecar` | Label `host` |
-| `EXTRA_LABELS` | `env=test` | weitere Labels |
-| `DB2DIAG_FILE` | siehe oben | Pfad oder Glob-Muster, mehrere durch Komma |
-| `START_AT` | `beginning` | `beginning` oder `end`, gilt nur beim allerersten Start |
-| `STATE_FILE` | `/state/position.json` | gespeicherte Leseposition |
+Einstellungen (Umgebungsvariablen im Service `db2diag-sidecar`): `LOKI_URL`, `DB2DIAG_CMD`, `HOST_LABEL`, `EXTRA_LABELS`, `LOG_LEVEL` sowie alle weiteren Variablen des Shippers (`BATCH_SIZE`, `LOKI_USERNAME` …). `DB2INSTANCE` und `DB2_INSTANCE_HOME` legen fest, welche Instanz verwendet wird.
 
-Dazu die Variablen des normalen Shippers (`BATCH_SIZE`, `FLUSH_SECONDS`, `MAX_BUFFER`, `LOKI_USERNAME` …).
-
-Der Sidecar läuft als root, damit er `db2diag.log` unabhängig von UID und Rechten des Instanzbesitzers lesen kann. Das Volume ist read-only eingebunden.
+Falls `db2diag` mit dem read-only eingebundenen Volume nicht zurechtkommt, sieht man das in `podman logs sc-db2diag-sidecar` (Zeilen `db2diag: ...`). Dann in `compose.yaml` beim Sidecar `:ro` entfernen.
 
 ## Aufräumen
 

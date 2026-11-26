@@ -4,7 +4,7 @@ db2diag-shipper: liest "db2diag -f -json" fortlaufend und schickt jeden
 Eintrag an Grafana Loki.
 
 Laeuft auf dem Db2-Server als Instanzbesitzer (db2diag muss im PATH sein).
-Nur Python-Standardbibliothek, Python 3.7 oder neuer.
+Nur Python-Standardbibliothek, Python 3.6 oder neuer.
 
 Konfiguration ueber Umgebungsvariablen:
   LOKI_URL            z. B. http://monitoring-host:3100   (Pflicht)
@@ -96,7 +96,7 @@ def parse_timestamp(value):
         if ts.tzinfo is None:
             ts = ts.astimezone()  # lokale Zeit des Servers
         return ts.astimezone(dt.timezone.utc)
-    except ValueError:
+    except (ValueError, AttributeError):  # AttributeError: fromisoformat fehlt in Python 3.6
         return None
 
 

@@ -46,6 +46,14 @@ Der Db2-Community-Container braucht `privileged`. Bei Podman unter Windows/macOS
 
 Die Test-Datenbank wird als Instanzbesitzer `db2inst1` abgefragt. Die externe Datenbank lässt sich zusätzlich überwachen: dazu den auskommentierten Block in `config/exporter/targets.testdb.yaml` aktivieren.
 
+### Variante 3: Sidecar-Stack (Db2 + db2diag-Sidecar + Monitor)
+
+Eigenständiges Compose-Projekt im Ordner [`sidecar/`](sidecar/README.md): Db2-Container, ein Sidecar, der `db2diag.log` aus dem geteilten Volume an Loki schickt, und der komplette Monitor. Alles ist vorkonfiguriert.
+
+```bash
+cd sidecar && podman compose up -d --build
+```
+
 ### Aufrufen
 
 | Dienst     | URL                              | Hinweis                         |
@@ -278,4 +286,5 @@ diag-shipper/                    db2diag-Shipper, systemd-Unit, Beispiel-Konfigu
 sql/grants.sql                   Rechte für den Monitoring-Benutzer
 scripts/workload.sh              Testlast für die Test-Datenbank
 scripts/testdb-diag-shipper.sh   Shipper im Test-Container starten
+sidecar/                         eigener Stack: Db2 + db2diag-Sidecar + Monitor
 ```

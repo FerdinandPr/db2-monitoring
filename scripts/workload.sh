@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Erzeugt etwas Last auf der Test-Datenbank, damit die Dashboards Daten zeigen.
 # Aufruf: ./scripts/workload.sh [Runden]   (Standard: 50)
+# Anderer Container/DB: DB2_CONTAINER=sc-db2 DB2_TEST_DBNAME=TESTDB ./scripts/workload.sh
 set -euo pipefail
 ROUNDS="${1:-50}"
 RUNTIME="${CONTAINER_RUNTIME:-podman}"
+CONTAINER="${DB2_CONTAINER:-db2-test}"
 DB="${DB2_TEST_DBNAME:-TESTDB}"
 
-"$RUNTIME" exec -i -u db2inst1 db2-test bash -l -s <<SQL
+"$RUNTIME" exec -i -u db2inst1 "$CONTAINER" bash -l -s <<SQL
 db2 connect to $DB > /dev/null
 db2 -x "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA='DEMO' AND TABNAME='ORDERS'" | grep -q 1 || {
   db2 "CREATE TABLE DEMO.ORDERS (ID INTEGER NOT NULL GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
